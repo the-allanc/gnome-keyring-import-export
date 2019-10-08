@@ -16,7 +16,6 @@
 # 2) Import:
 #
 #   gnome_keyring_import_export.py import somefile.json
-#   cat somefile.json | gnome_keyring_import_export.py import stdin
 #
 # This attempts to be intelligent about not duplicating
 # secrets already in the keyrings - see messages.
@@ -46,14 +45,31 @@
 
 import json
 import sys
-import urlparse
 
-import lxml.etree
-from lxml.etree import Element
-import pygtk
-pygtk.require('2.0')
-import gtk # sets app name
-import gnomekeyring
+# Rather than requiring specific versions of libraries, I'm just going
+# to suppress the warnings about it - I don't want to unnecessarily
+# require strict versions when it's possible this script is flexible
+# enough to run across multiple versions.
+import warnings
+from gi import PyGIWarning
+warnings.filterwarnings('ignore', category=PyGIWarning)
+
+from gi.repository import Gtk
+from gi.repository import GnomeKeyring
+
+class ErrorResult(Exception): pass
+
+# This will take the result tuple from an invoked
+# function, and either return the result or raise
+# an error if an error code was raised.
+def chk(tpl):
+    if isinstance(tpl, tuple):
+        code, res = tpl
+    else:
+        code, res = tpl, None
+    if code != GnomeKeyring.Result.OK:
+        raise ErrorResult(code)
+    return res
 
 def mk_copy(item):
     c = item.copy()
@@ -82,10 +98,10 @@ def export_keyrings(to_file):
 
 def get_gnome_keyrings():
     keyrings = {}
-    for keyring_name in gnomekeyring.list_keyring_names_sync():
+    for keyring_name in chk(GnomeKeyring.list_keyring_names_sync()):
         keyring_items = []
         keyrings[keyring_name] = keyring_items
-        for id in gnomekeyring.list_item_ids_sync(keyring_name):
+        for id in chk(GnomeKeyring.list_item_ids_sync(keyring_name)):
             item = get_item(keyring_name, id)
             if item is not None:
                 keyring_items.append(item)
@@ -122,6 +138,9 @@ def export_chrome_to_firefox(to_file):
     file(to_file, "w").write(xml)
 
 def items_to_firefox_xml(items):
+    import lxml.etree
+    from lxml.etree import Element
+    import urlparse
     doc = Element('xml')
     entries = Element('entries',
                       dict(ext="Password Exporter", extxmlversion="1.1", type="saved", encrypt="false"))
@@ -142,30 +161,35 @@ def items_to_firefox_xml(items):
 
 def get_item(keyring_name, id):
     try:
-        item = gnomekeyring.item_get_info_sync(keyring_name, id)
-    except gnomekeyring.IOError as e:
-        sys.stderr.write("Could not examine item (%s, %s): %s\n" % (keyring_name, id, e.message))
+        item = chk(GnomeKeyring.item_get_info_sync(keyring_name, id))
+    except BadResult as e:
+        sys.stderr.write("Could not examine item (%s, %s): %s\n" % (keyring_name, id, e))
         return None
+    attrs = {attr.name: attr.get_string() for item in chk(GnomeKeyring.find_items_sync(GnomeKeyring.ItemType.GENERIC_SECRET, GnomeKeyring.Attribute.list_new()))
+                                          for attr in GnomeKeyring.Attribute.list_to_glist(item.attributes)
+                                          if item.keyring == keyring_name and item.item_id == id}
     return {
         'display_name': item.get_display_name(),
         'secret': item.get_secret(),
         'mtime': item.get_mtime(),
         'ctime': item.get_ctime(),
-        'attributes': gnomekeyring.item_get_attributes_sync(keyring_name, id),
+        'attributes': attrs,
         }
 
 
 def fix_attributes(d):
-    return {str(k): str(v) if isinstance(v, unicode) else v for k, v in d.items()}
-
+    res = GnomeKeyring.Attribute.list_new()
+    for (k, v) in d.items():
+        GnomeKeyring.Attribute.list_append_string(res, k, v)
+    return res
 
 def import_keyrings(from_file):
     keyrings = json.loads(open(from_file).read())
 
     for keyring_name, keyring_items in keyrings.items():
         try:
-            existing_ids = gnomekeyring.list_item_ids_sync(keyring_name)
-        except gnomekeyring.NoSuchKeyringError:
+            existing_ids = chk(GnomeKeyring.list_item_ids_sync(keyring_name))
+        except GnomeKeyring.NoSuchKeyringError:
             sys.stderr.write("No keyring '%s' found. Please create this keyring first" % keyring_name)
             sys.exit(1)
 
@@ -187,15 +211,15 @@ def import_keyrings(from_file):
                 else:
                     schema = item['attributes']['xdg:schema']
                     item_type = None
-                    if schema ==  u'org.freedesktop.Secret.Generic':
-                        item_type = gnomekeyring.ITEM_GENERIC_SECRET
-                    elif schema == u'org.gnome.keyring.Note':
-                        item_type = gnomekeyring.ITEM_NOTE
+                    if schema == u'org.gnome.keyring.Note':
+                        item_type = GnomeKeyring.ItemType.NOTE
                     elif schema == u'org.gnome.keyring.NetworkPassword':
-                        item_type = gnomekeyring.ITEM_NETWORK_PASSWORD
+                        item_type = GnomeKeyring.ItemType.NETWORK_PASSWORD
+                    else:
+                        item_type = GnomeKeyring.ItemType.GENERIC_SECRET
 
                     if item_type is not None:
-                        item_id = gnomekeyring.item_create_sync(keyring_name,
+                        item_id = GnomeKeyring.item_create_sync(keyring_name,
                                                                 item_type,
                                                                 item['display_name'],
                                                                 fix_attributes(item['attributes']),
