@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Simple script for exporting gnome2 (seahorse) keyrings,
 # and re-importing on another machine.
@@ -78,7 +78,7 @@ def items_roughly_equal(item1, item2, ignore_secret=False):
     return c1 == c2
 
 def export_keyrings(to_file):
-    file(to_file, "w").write(json.dumps(get_gnome_keyrings(), indent=2))
+    open(to_file, "w").write(json.dumps(get_gnome_keyrings(), indent=2))
 
 def get_gnome_keyrings():
     keyrings = {}
@@ -160,12 +160,7 @@ def fix_attributes(d):
 
 
 def import_keyrings(from_file):
-    if sys.argv[2] == "stdin" or sys.argv[2] == "-" and not sys.stdin.isatty():
-        jsondata = sys.stdin
-    else:
-        jsondata = file(from_file)
-
-    keyrings = json.loads(jsondata.read())
+    keyrings = json.loads(open(from_file).read())
 
     for keyring_name, keyring_items in keyrings.items():
         try:
@@ -179,16 +174,16 @@ def import_keyrings(from_file):
 
         for item in keyring_items:
             if any(items_roughly_equal(item, i) for i in existing_items):
-                print "Skipping %s because it already exists" % item['display_name']
+                print("Skipping %s because it already exists" % item['display_name'])
             else:
                 nearly = [i for i in existing_items if items_roughly_equal(i, item, ignore_secret=True)]
                 if nearly:
-                    print "Existing secrets found for '%s'" % item['display_name']
+                    print("Existing secrets found for '%s'" % item['display_name'])
                     for i in nearly:
-                        print " " + i['secret']
+                        print(" " + i['secret'])
 
-                    print "So skipping value from '%s':" % from_file
-                    print " " + item['secret']
+                    print("So skipping value from '%s':" % from_file)
+                    print(" " + item['secret'])
                 else:
                     schema = item['attributes']['xdg:schema']
                     item_type = None
@@ -206,9 +201,9 @@ def import_keyrings(from_file):
                                                                 fix_attributes(item['attributes']),
                                                                 item['secret'],
                                                                 False)
-                        print "Copying secret %s" % item['display_name']
+                        print("Copying secret %s" % item['display_name'])
                     else:
-                        print "Can't handle secret '%s' of type '%s', skipping" % (item['display_name'], schema)
+                        print("Can't handle secret '%s' of type '%s', skipping" % (item['display_name'], schema))
 
 
 if __name__ == '__main__':
@@ -221,5 +216,5 @@ if __name__ == '__main__':
             export_chrome_to_firefox(sys.argv[2])
 
     else:
-        print "See source code for usage instructions"
+        print("See source code for usage instructions")
         sys.exit(1)
